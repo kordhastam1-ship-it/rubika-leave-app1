@@ -11,9 +11,9 @@ permissions:
 
 jobs:
   build:
-    name: Build APK
+    name: Build Android APK
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -28,10 +28,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip \
+            git zip unzip curl \
             openjdk-17-jdk \
-            python3-pip \
-            python3-venv \
+            python3-pip python3-venv \
             build-essential \
             autoconf automake libtool pkg-config \
             zlib1g-dev libncurses-dev cmake \
@@ -42,31 +41,76 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install "Cython==0.29.36" "buildozer==1.5.0"
 
-      - name: Configure Android environment
+      - name: Configure Java and Android SDK
         run: |
-          echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> "$GITHUB_ENV"
+
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+
+          mkdir -p "$SDK_DIR"
           mkdir -p "$HOME/.android"
           touch "$HOME/.android/repositories.cfg"
 
-      - name: Cache Buildozer downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            .buildozer
-            ~/.buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: |
-            buildozer-${{ runner.os }}-
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Install Android SDK build tools
+      - name: Install Android SDK command line tools
+        run: |
+          set -e
+
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          TEMP_DIR="$RUNNER_TEMP/android-tools"
+
+          mkdir -p "$TEMP_DIR"
+          mkdir -p "$SDK_DIR/cmdline-tools"
+
+          curl -fL \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -o "$TEMP_DIR/tools.zip"
+
+          unzip -q "$TEMP_DIR/tools.zip" -d "$TEMP_DIR"
+
+          rm -rf "$SDK_DIR/cmdline-tools/latest"
+          mv "$TEMP_DIR/cmdline-tools" "$SDK_DIR/cmdline-tools/latest"
+
+          mkdir -p "$SDK_DIR/tools/bin"
+
+          ln -sf \
+            "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_DIR/tools/bin/sdkmanager"
+
+          echo "$SDK_DIR/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_DIR/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK_DIR/tools/bin" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK packages
+        run: |
+          set -e
+
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses || true
+
+          "$SDKMANAGER" --sdk_root="$SDK_DIR" \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.2" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses || true
+
+      - name: Verify Android tools
         run: |
           SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          mkdir -p "$SDK_DIR"
-          echo "ANDROID_HOME=$SDK_DIR" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> $GITHUB_ENV
-          mkdir -p "$HOME/.android"
-          touch "$HOME/.android/repositories.cfg"
+
+          test -x "$SDK_DIR/tools/bin/sdkmanager"
+          test -d "$SDK_DIR/build-tools"
+
+          echo "Android SDK tools are installed."
+          "$SDK_DIR/tools/bin/sdkmanager" --version
 
       - name: Build APK
         run: |
